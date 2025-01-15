@@ -40,6 +40,8 @@ class Record:
     record_type: str
     name: str
     table_name: str
+    rootpage: bytes
+    sql: str
     serial_types: list[SQLiteSerialType]
 
     @classmethod
@@ -74,9 +76,30 @@ class Record:
         table_name = (data[offset : offset + bytes_length]).decode()
         offset += bytes_length
 
+        bytes_length = serial_types[3][1]
+        rootpage = data[offset : offset + bytes_length]
+        offset += bytes_length
+
+        bytes_length = serial_types[4][1]
+        sql = (data[offset : offset + bytes_length]).decode()
+        offset += bytes_length
+
         return cls(
             record_type=record_type,
             name=name,
             table_name=table_name,
+            rootpage=rootpage,
+            sql=sql,
             serial_types=serial_types,
         )
+
+
+@dataclass
+class SQL:
+    operation: str
+    table: str
+
+    @classmethod
+    def from_query(cls, query: str):
+        pieces = query.split(" ")
+        return SQL(operation=pieces[0], table=pieces[-1])

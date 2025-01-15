@@ -1,7 +1,7 @@
 import sys
 from enum import Enum
 
-from .parsers import Varint, Record
+from .parsers import Varint, Record, SQL
 
 # import sqlparse - available if you need it!
 
@@ -52,6 +52,20 @@ def get_cell_pointers(page: bytes, cell_count: int) -> list[int]:
     return cell_pointers
 
 
+def get_records(database_file: bytes, page: bytes, cell_count: int) -> list[Record]:
+    records = []
+    for cell_pointer in get_cell_pointers(page, cell_count):
+        database_file.seek(cell_pointer)
+        # The first relevant information in the cell is a varint that describes the record's size
+        record_size_varint = Varint.from_data(database_file)
+        # The second information is the rowid, also a varint - irrelevant for us now
+        _rowid_varint = Varint.from_data(database_file)
+        # The third information is the actual record
+        data = database_file.read(record_size_varint.value)
+        records.append(Record.from_data(data))
+    return records
+
+
 def main():
     database_file_path = sys.argv[1]
     command = sys.argv[2]
@@ -71,20 +85,43 @@ def main():
             # Page header is directly after file header
             page = database_file.read(page_size)
 
-            records = []
-            for cell_pointer in get_cell_pointers(page, cell_count):
-                database_file.seek(cell_pointer)
-                # The first relevant information in the cell is a varint that describes the record's size
-                record_size_varint = Varint.from_data(database_file)
-                # The second information is the rowid, also a varint - irrelevant for us now
-                _rowid_varint = Varint.from_data(database_file)
-                # The third information is the actual record
-                data = database_file.read(record_size_varint.value)
-                records.append(Record.from_data(data))
-
+            records = get_records(database_file, page, cell_count)
             table_names = [record.table_name for record in records]
             table_names.sort()
             print(" ".join(table_names))
+    elif command.startswith("select"):
+        sql = SQL.from_query(command)
+
+        with open(database_file_path, "rb") as database_file:
+            page_size = get_page_size(database_file)
+            cell_count = get_cell_count(database_file, page_size)
+            # Skip file header
+            database_file.seek(100)
+            # Page header is directly after file header
+            page = database_file.read(page_size)
+
+            # Get the schema record corresponding to the table we're looking up
+            record = next(
+                (
+                    record
+                    for record in get_records(database_file, page, cell_count)
+                    if record.table_name == sql.table
+                )
+            )
+            # rootpage is 1-indexed, so we need to subtract 1 to get to the correct page
+            page_number = int.from_bytes(record.rootpage, byteorder="big") - 1
+
+            # Read the page into memory
+            database_file.seek(page_size * page_number)
+            page = database_file.read(page_size)
+            page_type = PageType(page[0])
+            if not page_type == PageType.LEAF_TABLE_B_TREE:
+                raise Exception("Expected page type to be leaf table b-tree")
+
+            # Leaf table b-tree pages have 8-byte sized headers,
+            # with the cell count on offset 3, using a 2-byte integer
+            cell_count = int.from_bytes(page[3 : 3 + 2])
+            print(cell_count)
     else:
         print(f"Invalid command: {command}")
 
