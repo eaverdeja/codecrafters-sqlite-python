@@ -74,7 +74,7 @@ def main():
             records = []
             for cell_pointer in get_cell_pointers(page, cell_count):
                 database_file.seek(cell_pointer)
-                # The relevant information in the cell is a varint that describes the record's size
+                # The first relevant information in the cell is a varint that describes the record's size
                 record_size_varint = Varint.from_data(database_file)
                 # The second information is the rowid, also a varint - irrelevant for us now
                 _rowid_varint = Varint.from_data(database_file)
