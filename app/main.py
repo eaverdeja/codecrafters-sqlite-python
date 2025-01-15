@@ -1,15 +1,9 @@
 import sys
 from enum import Enum
 
-from dataclasses import dataclass
-
-from .parser import parse_varint, Record
-from .serial_type import SQLiteSerialType
+from .parsers import Varint, Record
 
 # import sqlparse - available if you need it!
-
-database_file_path = sys.argv[1]
-command = sys.argv[2]
 
 
 class PageType(Enum):
@@ -19,13 +13,13 @@ class PageType(Enum):
     LEAF_TABLE_B_TREE = 0x0D
 
 
-def get_page_size(database_file):
+def get_page_size(database_file: bytes):
     # Skip the first 16 bytes of the header
     database_file.seek(16)
     return int.from_bytes(database_file.read(2), byteorder="big")
 
 
-def get_cell_count(database_file):
+def get_cell_count(database_file: bytes, page_size: int):
     # Skip file header
     database_file.seek(100)
     # Page header is directly after file header
@@ -35,7 +29,7 @@ def get_cell_count(database_file):
     return int.from_bytes(page[3 : 3 + 2], byteorder="big")
 
 
-def get_cell_pointers(page: bytes) -> list[int]:
+def get_cell_pointers(page: bytes, cell_count: int) -> list[int]:
     # Page type is available as a 1-byte value from the 0 offset
     page_type = PageType(page[0])
     # The page header is 8 bytes in size for leaf pages, 12 bytes otherwise
@@ -61,36 +55,42 @@ def get_cell_pointers(page: bytes) -> list[int]:
     return cell_pointers
 
 
-if command == ".dbinfo":
-    with open(database_file_path, "rb") as database_file:
-        page_size = get_page_size(database_file)
-        cell_count = get_cell_count(database_file)
-        print(f"database page size: {page_size}")
-        print(f"number of tables: {cell_count}")
-elif command == ".tables":
-    with open(database_file_path, "rb") as database_file:
-        page_size = get_page_size(database_file)
-        cell_count = get_cell_count(database_file)
-        # Skip file header
-        database_file.seek(100)
-        # Page header is directly after file header
-        page = database_file.read(page_size)
+def main():
+    database_file_path = sys.argv[1]
+    command = sys.argv[2]
 
-        records = []
-        for cell_pointer in get_cell_pointers(page):
-            database_file.seek(cell_pointer)
-            # The relevant information in the cell is a varint that describes the record's size
-            record_size, _ = parse_varint(database_file)
-            # The second information is the rowid, also a varint - irrelevant for us now
-            _rowid, _ = parse_varint(database_file)
-            # The third information is the actual record
-            data = database_file.read(record_size)
-            records.append(Record.from_data(data))
+    if command == ".dbinfo":
+        with open(database_file_path, "rb") as database_file:
+            page_size = get_page_size(database_file)
+            cell_count = get_cell_count(database_file, page_size)
+            print(f"database page size: {page_size}")
+            print(f"number of tables: {cell_count}")
+    elif command == ".tables":
+        with open(database_file_path, "rb") as database_file:
+            page_size = get_page_size(database_file)
+            cell_count = get_cell_count(database_file, page_size)
+            # Skip file header
+            database_file.seek(100)
+            # Page header is directly after file header
+            page = database_file.read(page_size)
 
-        table_names = [record.table_name for record in records]
-        table_names.sort()
-        print(" ".join(table_names))
+            records = []
+            for cell_pointer in get_cell_pointers(page, cell_count):
+                database_file.seek(cell_pointer)
+                # The relevant information in the cell is a varint that describes the record's size
+                record_size_varint = Varint.from_data(database_file)
+                # The second information is the rowid, also a varint - irrelevant for us now
+                _rowid_varint = Varint.from_data(database_file)
+                # The third information is the actual record
+                data = database_file.read(record_size_varint.value)
+                records.append(Record.from_data(data))
+
+            table_names = [record.table_name for record in records]
+            table_names.sort()
+            print(" ".join(table_names))
+    else:
+        print(f"Invalid command: {command}")
 
 
-else:
-    print(f"Invalid command: {command}")
+if __name__ == "__main__":
+    main()
