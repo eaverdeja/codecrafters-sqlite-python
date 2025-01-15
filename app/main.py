@@ -45,11 +45,8 @@ def get_cell_pointers(page: bytes, cell_count: int) -> list[int]:
     for i in range(cell_count):
         # Cell pointers are available as 2-byte integers,
         # starting right aftet the page header
-        cell_pointer = int.from_bytes(
-            page[page_header_size + i * 2 : page_header_size + (i + 1) * 2],
-            byteorder="big",
-        )
-        cell_pointers.append(cell_pointer)
+        b = page[page_header_size + i * 2 : page_header_size + (i + 1) * 2]
+        cell_pointers.append(int.from_bytes(b, byteorder="big"))
     cell_pointers.sort()
 
     return cell_pointers
