@@ -1,13 +1,10 @@
 from io import BufferedReader
 import sys
 from enum import Enum
-from sqlparse import parse as parse_sql
-
-from sqlparse import sql as sqlp
 
 from app.serial_type import SQLiteSerialType
 
-from .parsers import Varint, Record, SQL
+from .parsers import UserTableRecord, Varint, SqliteSchemaRecord, SQL
 
 
 class PageType(Enum):
@@ -28,6 +25,10 @@ def get_cell_count(database_file: BufferedReader, page_size: int):
     database_file.seek(100)
     # Page header is directly after file header
     page = database_file.read(page_size)
+    return get_cell_count_from_page(page)
+
+
+def get_cell_count_from_page(page: bytes) -> int:
     # The cell count is available as a 2-byte integer,
     # starting from a 3-byte offset
     return int.from_bytes(page[3 : 3 + 2], byteorder="big")
@@ -58,9 +59,11 @@ def get_cell_pointers(page: bytes, cell_count: int) -> list[int]:
 
 def get_records_for_sqlite_schema_table(
     database_file: BufferedReader, page: bytes, cell_count: int
-) -> list[Record]:
-    records = _get_records(database_file, page, cell_count)
-    return map(lambda r: Record.from_data(r), records)
+) -> list[SqliteSchemaRecord]:
+    return map(
+        lambda r: SqliteSchemaRecord.from_record(r),
+        _get_records(database_file, page, cell_count),
+    )
 
 
 def get_records_for_table(
@@ -69,35 +72,11 @@ def get_records_for_table(
     cell_count: int,
     start: int,
     table_columns: list[str],
-) -> list:
-    records = _get_records(database_file, page, cell_count, start)
-    response = []
-    for data in records:
-        offset = 0
-        # First piece of information is the record header size
-        record_header = Varint.from_data(data)
-        offset += record_header.bytes_length
-
-        serial_types = []
-        # The next pieces are varints describing the column types and sizes
-        total_bytes_read = 0
-        while total_bytes_read < record_header.value - 1:
-            piece = data[offset + total_bytes_read :]
-            serial_type_varint = Varint.from_data(piece)
-            total_bytes_read += serial_type_varint.bytes_length
-            serial_types.append(SQLiteSerialType.decode(serial_type_varint.value))
-
-        offset += total_bytes_read
-
-        columns = {}
-        for column_idx, column in enumerate(table_columns):
-            bytes_length = serial_types[column_idx][1]
-            value = (data[offset : offset + bytes_length]).decode()
-            columns[column] = value
-            offset += bytes_length
-        response.append(columns)
-
-    return response
+) -> list[UserTableRecord]:
+    return map(
+        lambda r: UserTableRecord.from_record(r, table_columns=table_columns),
+        _get_records(database_file, page, cell_count, start),
+    )
 
 
 def _get_records(
@@ -141,8 +120,8 @@ def main():
             table_names = [record.table_name for record in records]
             table_names.sort()
             print(" ".join(table_names))
-    elif command.startswith("select"):
-        sql = SQL.from_query(command)
+    elif command.upper().startswith("SELECT "):
+        user_command_sql = SQL.from_query(command)
 
         with open(database_file_path, "rb") as database_file:
             page_size = get_page_size(database_file)
@@ -153,17 +132,17 @@ def main():
             page = database_file.read(page_size)
 
             # Get the schema record corresponding to the table we're looking up
-            record = next(
+            table_record = next(
                 (
                     record
                     for record in get_records_for_sqlite_schema_table(
                         database_file, page, cell_count
                     )
-                    if record.table_name == sql.table
+                    if record.table_name == user_command_sql.table
                 )
             )
             # rootpage is 1-indexed, so we need to subtract 1 to get to the correct page
-            page_number = int.from_bytes(record.rootpage, byteorder="big") - 1
+            page_number = int.from_bytes(table_record.rootpage, byteorder="big") - 1
 
             # Read the page into memory
             database_file.seek(page_size * page_number)
@@ -172,35 +151,28 @@ def main():
             if not page_type == PageType.LEAF_TABLE_B_TREE:
                 raise Exception("Expected page type to be leaf table b-tree")
 
-            if "count(*)" in sql.identifiers:
+            if "count(*)" in user_command_sql.columns:
                 # Leaf table b-tree pages have 8-byte sized headers,
                 # with the cell count on offset 3, using a 2-byte integer
                 cell_count = int.from_bytes(page[3 : 3 + 2])
                 print(cell_count)
             else:  # Assume a SELECT {columns} FROM {table} type query
-                create_query = SQL.from_query(record.sql)
-                select_query = parse_sql(command)[0]
-                selected_columns = [
-                    token
-                    for token in select_query.tokens[:-1]
-                    if isinstance(token, sqlp.Identifier)
-                ]
 
-                cell_count = int.from_bytes(page[3 : 3 + 2], byteorder="big")
-                cell_content_area_offset = int.from_bytes(
-                    page[5 : 5 + 2], byteorder="big"
-                )
-                database_file.seek(cell_content_area_offset)
+                # Parse the CREATE TABLE query to figure out
+                # the available columns and their ordering
+                create_query = SQL.from_query(table_record.sql)
+                # Retrive the data records for our lookup table
                 records = get_records_for_table(
                     database_file,
                     page,
-                    cell_count,
+                    cell_count=get_cell_count_from_page(page),
                     start=page_size * page_number,
-                    table_columns=create_query.identifiers,
+                    table_columns=create_query.columns,
                 )
+                # Print out the values for the lookup column
                 for record in records:
-                    for column in selected_columns:
-                        print(record[column.value])
+                    for column in user_command_sql.columns:
+                        print(record[column])
     else:
         print(f"Invalid command: {command}")
 

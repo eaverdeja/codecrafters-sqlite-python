@@ -39,7 +39,7 @@ class Varint:
 
 
 @dataclass
-class Record:
+class SqliteSchemaRecord:
     record_type: str
     name: str
     table_name: str
@@ -48,7 +48,7 @@ class Record:
     serial_types: list[SQLiteSerialType]
 
     @classmethod
-    def from_data(cls, data: bytes):
+    def from_record(cls, data: bytes):
         offset = 0
         # First piece of information is the record header size
         record_header = Varint.from_data(data)
@@ -97,10 +97,41 @@ class Record:
         )
 
 
+class UserTableRecord:
+    @classmethod
+    def from_record(cls, data: bytes, table_columns: list[str]):
+        offset = 0
+        # First piece of information is the record header size
+        record_header = Varint.from_data(data)
+        offset += record_header.bytes_length
+
+        serial_types = []
+        # The next pieces are varints describing the column types and sizes
+        total_bytes_read = 0
+        while total_bytes_read < record_header.value - 1:
+            piece = data[offset + total_bytes_read :]
+            serial_type_varint = Varint.from_data(piece)
+            total_bytes_read += serial_type_varint.bytes_length
+            serial_types.append(SQLiteSerialType.decode(serial_type_varint.value))
+
+        offset += total_bytes_read
+
+        # For every column we have, pair it with a serial type
+        # and retrieve the associated data
+        columns = {}
+        for column_idx, column in enumerate(table_columns):
+            bytes_length = serial_types[column_idx][1]
+            value = (data[offset : offset + bytes_length]).decode()
+            columns[column] = value
+            offset += bytes_length
+
+        return columns
+
+
 @dataclass
 class SQL:
     operation: str
-    identifiers: list[str]
+    columns: list[str]
     table: str
 
     @classmethod
@@ -119,23 +150,21 @@ class SQL:
                 )
             )
             columns = tokens[-1]
-            identifiers = [
+            columns = [
                 # This will extract the column names
                 token.lstrip(" \n\t(").split(" ")[0]
                 for token in columns.value.split(",")
                 if token not in ["(", ")"]
             ]
-            return SQL(operation=operation, table=table, identifiers=identifiers)
+            return SQL(operation=operation, table=table, columns=columns)
 
         elif operation == "select":
-            identifiers = [
+            columns = [
                 token.value
                 for token in tokens[1:-2]
                 if isinstance(token, sql.Function) or isinstance(token, sql.Identifier)
             ]
 
-            return SQL(
-                operation=operation, identifiers=identifiers, table=tokens[-1].value
-            )
+            return SQL(operation=operation, columns=columns, table=tokens[-1].value)
         else:
             raise Exception(f"Unsupported operation type: {operation}")
