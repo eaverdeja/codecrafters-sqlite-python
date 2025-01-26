@@ -3,6 +3,9 @@ from .serial_type import SQLiteSerialType
 
 from dataclasses import dataclass
 
+from sqlparse import parse as parse_sql
+from sqlparse import sql as sql
+
 
 @dataclass
 class Varint:
@@ -97,9 +100,42 @@ class Record:
 @dataclass
 class SQL:
     operation: str
+    identifiers: list[str]
     table: str
 
     @classmethod
     def from_query(cls, query: str):
-        pieces = query.split(" ")
-        return SQL(operation=pieces[0], table=pieces[-1])
+        sql_statement = parse_sql(query)
+        tokens = sql_statement[0].tokens
+        operation = tokens[0].value.lower()
+        if operation == "create":
+            table = next(
+                iter(
+                    [
+                        token.value
+                        for token in tokens[1:-2]
+                        if isinstance(token, sql.Identifier)
+                    ]
+                )
+            )
+            columns = tokens[-1]
+            identifiers = [
+                # This will extract the column names
+                token.lstrip(" \n\t(").split(" ")[0]
+                for token in columns.value.split(",")
+                if token not in ["(", ")"]
+            ]
+            return SQL(operation=operation, table=table, identifiers=identifiers)
+
+        elif operation == "select":
+            identifiers = [
+                token.value
+                for token in tokens[1:-2]
+                if isinstance(token, sql.Function) or isinstance(token, sql.Identifier)
+            ]
+
+            return SQL(
+                operation=operation, identifiers=identifiers, table=tokens[-1].value
+            )
+        else:
+            raise Exception(f"Unsupported operation type: {operation}")
