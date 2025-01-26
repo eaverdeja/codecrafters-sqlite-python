@@ -159,12 +159,12 @@ class SQL:
             return SQL(operation=operation, table=table, columns=columns)
 
         elif operation == "select":
-            columns = [
-                token.value
-                for token in tokens[1:-2]
-                if isinstance(token, sql.Function) or isinstance(token, sql.Identifier)
-            ]
-
+            columns = []
+            for token in tokens[1:-2]:
+                if isinstance(token, sql.Function) or isinstance(token, sql.Identifier):
+                    columns.append(token.value)
+                elif isinstance(token, sql.IdentifierList):
+                    columns += map(lambda t: t.strip(), token.value.split(","))
             return SQL(operation=operation, columns=columns, table=tokens[-1].value)
         else:
             raise Exception(f"Unsupported operation type: {operation}")

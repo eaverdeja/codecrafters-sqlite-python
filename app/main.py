@@ -171,8 +171,13 @@ def main():
                 )
                 # Print out the values for the lookup column
                 for record in records:
-                    for column in user_command_sql.columns:
-                        print(record[column])
+                    for idx, column in enumerate(user_command_sql.columns):
+                        sys.stdout.write(record[column])
+                        # Separate with a | in case we still have columns
+                        if idx != len(user_command_sql.columns) - 1:
+                            sys.stdout.write("|")
+                    sys.stdout.write("\n")
+
     else:
         print(f"Invalid command: {command}")
 
