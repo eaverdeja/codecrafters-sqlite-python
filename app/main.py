@@ -2,8 +2,6 @@ from io import BufferedReader
 import sys
 from enum import Enum
 
-from app.serial_type import SQLiteSerialType
-
 from .parsers import UserTableRecord, Varint, SqliteSchemaRecord, SQL
 
 
@@ -171,12 +169,40 @@ def main():
                 )
                 # Print out the values for the lookup column
                 for record in records:
-                    for idx, column in enumerate(user_command_sql.columns):
-                        sys.stdout.write(record[column])
-                        # Separate with a | in case we still have columns
-                        if idx != len(user_command_sql.columns) - 1:
-                            sys.stdout.write("|")
-                    sys.stdout.write("\n")
+                    # Compute any comparison and apply our where clause
+                    # to filter out records
+                    comparisons = {
+                        col: user_command_sql.where.get(col)
+                        for col in create_query.columns
+                    }
+                    column_values = {col: record[col] for col in create_query.columns}
+                    pairs = zip(column_values.values(), comparisons.values())
+                    if any(
+                        comparison is not None and value.lower() != comparison.lower()
+                        for value, comparison in pairs
+                    ):
+                        continue
+
+                    # Keep things sorted as specified in the user command SQL
+                    def _find(l: list, value: str) -> int:
+                        try:
+                            return l.index(value)
+                        except ValueError:
+                            return -1
+
+                    sorted_columns = sorted(
+                        column_values.items(),
+                        key=lambda column: _find(user_command_sql.columns, column[0]),
+                    )
+
+                    # Join the column values and print them out,
+                    # if they are specified in the user command SQL
+                    line = "|".join(
+                        column_value
+                        for column_name, column_value in sorted_columns
+                        if column_name in user_command_sql.columns
+                    )
+                    print(line)
 
     else:
         print(f"Invalid command: {command}")
