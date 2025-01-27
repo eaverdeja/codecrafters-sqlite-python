@@ -1,4 +1,5 @@
-from app.parsers import Varint, Record
+from app.records import Record
+from app.varint import Varint
 
 
 class TestVarint:
