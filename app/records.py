@@ -2,12 +2,40 @@ from dataclasses import dataclass
 
 from .serial_type import SQLiteSerialType
 from .varint import Varint
+from .database import Database
+from .page import Page
 
 
 @dataclass
 class RecordFormat:
     @classmethod
-    def _parse_header(cls, data: bytes) -> tuple[int, list[SQLiteSerialType]]:
+    def get_records(cls, database: Database, page: Page) -> list[bytes]:
+        records = []
+        with database.reader() as database_file:
+            for cell_pointer in page.cell_pointers:
+                database_file.seek(database.page_size * page.page_number + cell_pointer)
+                # The first relevant information in the cell is a varint that describes the record's size
+                record_size_varint = Varint.from_data(database_file)
+                # The second information is the rowid, also a varint - irrelevant for us now
+                _rowid_varint = Varint.from_data(database_file)
+                # The third information is the actual record
+                data = database_file.read(record_size_varint.value)
+                records.append(data)
+        return records
+
+    @classmethod
+    def parse_header(cls, data: bytes) -> tuple[int, list[SQLiteSerialType]]:
+        """
+        The header begins with a single varint which determines the total number of bytes in the header.
+        The varint value is the size of the header in bytes including the size varint itself.
+        Following the size varint are one or more additional varints, one per column.
+        These additional varints are called "serial type" numbers and determine the datatype of each column,
+        according to the following chart:
+        ...
+        The values for each column in the record immediately follow the header.
+
+        https://www.sqlite.org/fileformat.html#record_format
+        """
         offset = 0
         # First piece of information is the record header size
         record_header = Varint.from_data(data)
@@ -38,7 +66,7 @@ class SqliteSchemaRecord(RecordFormat):
 
     @classmethod
     def from_record(cls, data: bytes):
-        offset, serial_types = cls._parse_header(data)
+        offset, serial_types = cls.parse_header(data)
 
         # With the serial types and associated sizes for each column
         # we can start picking out the data
@@ -75,7 +103,7 @@ class SqliteSchemaRecord(RecordFormat):
 class UserTableRecord(RecordFormat):
     @classmethod
     def from_record(cls, data: bytes, table_columns: list[str]):
-        offset, serial_types = cls._parse_header(data)
+        offset, serial_types = cls.parse_header(data)
 
         # For every column we have, pair it with a serial type
         # and retrieve the associated data

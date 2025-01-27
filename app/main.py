@@ -1,42 +1,19 @@
 import sys
 
 from .database import Database
-from .page import Page, PageType
-from .records import UserTableRecord, SqliteSchemaRecord
-from .varint import Varint
+from .page import PageType
+from .records import RecordFormat, UserTableRecord, SqliteSchemaRecord
 from .sql import SQL
 
 
-def get_records_for_sqlite_schema_table(database: Database) -> list[SqliteSchemaRecord]:
-    page = database.get_page(0)
-    return [SqliteSchemaRecord.from_record(r) for r in _get_records(database, page)]
-
-
-def get_records_for_table(
+def _get_records_for_sqlite_schema_table(
     database: Database,
-    page: Page,
-    start: int,
-    table_columns: list[str],
-) -> list[UserTableRecord]:
+) -> list[SqliteSchemaRecord]:
+    page = database.get_page(0)
     return [
-        UserTableRecord.from_record(r, table_columns=table_columns)
-        for r in _get_records(database, page, start)
+        SqliteSchemaRecord.from_record(r)
+        for r in RecordFormat.get_records(database, page)
     ]
-
-
-def _get_records(database: Database, page: Page, start: int = 0) -> list[bytes]:
-    records = []
-    with database.reader() as database_file:
-        for cell_pointer in page.cell_pointers:
-            database_file.seek(start + cell_pointer)
-            # The first relevant information in the cell is a varint that describes the record's size
-            record_size_varint = Varint.from_data(database_file)
-            # The second information is the rowid, also a varint - irrelevant for us now
-            _rowid_varint = Varint.from_data(database_file)
-            # The third information is the actual record
-            data = database_file.read(record_size_varint.value)
-            records.append(data)
-    return records
 
 
 def main():
@@ -52,7 +29,7 @@ def main():
         # so the SQLite schema table only contains references to other tables.
         print(f"number of tables: {page.cell_count}")
     elif command == ".tables":
-        records = get_records_for_sqlite_schema_table(database)
+        records = _get_records_for_sqlite_schema_table(database)
         table_names = [record.table_name for record in records]
         table_names.sort()
         print(" ".join(table_names))
@@ -63,7 +40,7 @@ def main():
         table_record = next(
             (
                 record
-                for record in get_records_for_sqlite_schema_table(database)
+                for record in _get_records_for_sqlite_schema_table(database)
                 if record.table_name == user_command_sql.table
             )
         )
@@ -83,12 +60,10 @@ def main():
             # the available columns and their ordering
             create_query = SQL.from_query(table_record.sql)
             # Retrieve the data records for our lookup table
-            records = get_records_for_table(
-                database,
-                page,
-                start=database.page_size * page_number,
-                table_columns=create_query.columns,
-            )
+            records = [
+                UserTableRecord.from_record(r, table_columns=create_query.columns)
+                for r in RecordFormat.get_records(database, page)
+            ]
             # Print out the values for the lookup column
             for record in records:
                 # Compute any comparison and apply our where clause

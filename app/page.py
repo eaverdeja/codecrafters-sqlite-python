@@ -9,8 +9,9 @@ class PageType(Enum):
 
 
 class Page:
-    def __init__(self, data: bytes):
+    def __init__(self, data: bytes, page_number: int):
         self.data = data
+        self.page_number = page_number
 
         # The one-byte flag at offset 0 indicating the b-tree page type.
         self.type = PageType(data[0])

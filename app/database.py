@@ -18,7 +18,7 @@ class Database:
             f.seek(offset)
 
             data = f.read(self.page_size)
-            return Page(data)
+            return Page(data, page_number)
 
     @contextmanager
     def reader(self) -> Generator[None, None, BufferedReader]:
