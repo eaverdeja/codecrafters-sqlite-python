@@ -24,10 +24,18 @@ class Page:
             else 12
         )
 
+        # The four-byte page number at offset 8 is the right-most pointer.
+        # This value appears in the header of interior b-tree pages only
+        # and is omitted from all other pages.
+        self.rightmost_pointer = (
+            int.from_bytes(data[8:12], byteorder="big")
+            if self.type == PageType.INTERIOR_TABLE_B_TREE
+            else None
+        )
+
     @property
     def cell_count(self) -> int:
-        # Leaf table b-tree pages have 8-byte sized headers,
-        # with the cell count on offset 3, using a 2-byte integer
+        # The two-byte integer at offset 3 gives the number of cells on the page.
         return int.from_bytes(self.data[3:5], byteorder="big")
 
     @property
