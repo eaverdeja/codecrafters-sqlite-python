@@ -24,7 +24,7 @@ class RecordFormat:
         return records
 
     @classmethod
-    def parse_header(cls, data: bytes) -> tuple[int, list[SQLiteSerialType]]:
+    def parse_header(cls, data: bytes) -> tuple[int, list[tuple[str, int]]]:
         """
         The header begins with a single varint which determines the total number of bytes in the header.
         The varint value is the size of the header in bytes including the size varint itself.
@@ -62,7 +62,7 @@ class SqliteSchemaRecord(RecordFormat):
     table_name: str
     rootpage: bytes
     sql: str
-    serial_types: list[SQLiteSerialType]
+    serial_types: list[tuple[str, int]]
 
     @classmethod
     def from_record(cls, data: bytes):

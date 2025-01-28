@@ -21,7 +21,7 @@ class Database:
             return Page(data, page_number)
 
     @contextmanager
-    def reader(self) -> Generator[None, None, BufferedReader]:
+    def reader(self) -> Generator[BufferedReader, None, None]:
         with open(self.path, "rb") as f:
             yield f
 

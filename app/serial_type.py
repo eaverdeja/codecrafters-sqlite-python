@@ -15,7 +15,7 @@ class SQLiteSerialType(Enum):
     INT_0 = (8, "Integer value 0", 0)
     INT_1 = (9, "Integer value 1", 0)
 
-    def __init__(self, code: int, description: str, bytes_length: Optional[int] = None):
+    def __init__(self, code: int, description: str, bytes_length: int):
         self.code = code
         self.description = description
         self.bytes_length = bytes_length
