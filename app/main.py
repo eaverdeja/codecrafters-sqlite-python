@@ -34,18 +34,14 @@ def _get_total_cell_count_for_table(
                 left_child_pointer = int.from_bytes(
                     database_file.read(4), byteorder="big"
                 )
-                child_page = database.get_page(left_child_pointer)
-                if not child_page:
-                    raise Exception("Expected left pointer to point to valid page")
+                child_page = database.get_page(left_child_pointer - 1)
                 child_count = _get_total_cell_count_for_table(database, child_page)
                 total_count += child_count
 
         if page.rightmost_pointer:
-            if rightmost_page := database.get_page(page.rightmost_pointer):
-                rightmost_count = _get_total_cell_count_for_table(
-                    database, rightmost_page
-                )
-                total_count += rightmost_count
+            rightmost_page = database.get_page(page.rightmost_pointer - 1)
+            rightmost_count = _get_total_cell_count_for_table(database, rightmost_page)
+            total_count += rightmost_count
 
         return total_count
     else:
@@ -83,14 +79,14 @@ def main():
         # rootpage is 1-indexed, so we need to subtract 1 to get to the correct page
         page_number = int.from_bytes(table_record.rootpage, byteorder="big") - 1
 
-        # Read the page into memory
-        page = database.get_page(page_number)
+        # Read the root page into memory
+        root_page = database.get_page(page_number)
 
         if "count(*)" in user_command_sql.columns:
-            cell_count = _get_total_cell_count_for_table(database, page)
+            cell_count = _get_total_cell_count_for_table(database, root_page)
             print(cell_count)
         else:  # Assume a SELECT {columns} FROM {table} type query
-            if not page.type == PageType.LEAF_TABLE_B_TREE:
+            if not root_page.type == PageType.LEAF_TABLE_B_TREE:
                 raise Exception("Expected page type to be leaf table b-tree")
             # Parse the CREATE TABLE query to figure out
             # the available columns and their ordering
@@ -98,7 +94,7 @@ def main():
             # Retrieve the data records for our lookup table
             records = [
                 UserTableRecord.from_record(r, table_columns=create_query.columns)
-                for r in RecordFormat.get_records(database, page)
+                for r in RecordFormat.get_records(database, root_page)
             ]
             # Print out the values for the lookup column
             for record in records:
