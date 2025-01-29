@@ -2,7 +2,8 @@ import sys
 
 
 from .database import Database
-from .page import Page, PageType, CellCounter, walk_btree
+from .btree import RecordCollector, CellCounter
+from .page import Page, walk_btree
 from .records import RecordFormat, UserTableRecord, SqliteSchemaRecord
 from .sql import SQL
 
@@ -60,15 +61,16 @@ def main():
             cell_count = sum(walk_btree(root_page, database, CellCounter()))
             print(cell_count)
         else:  # Assume a SELECT {columns} FROM {table} type query
-            if not root_page.type == PageType.LEAF_TABLE_B_TREE:
-                raise Exception("Expected page type to be leaf table b-tree")
             # Parse the CREATE TABLE query to figure out
             # the available columns and their ordering
             create_query = SQL.from_query(table_record.sql)
             # Retrieve the data records for our lookup table
             records = [
-                UserTableRecord.from_record(r, table_columns=create_query.columns)
-                for r in RecordFormat.get_records(database, root_page)
+                UserTableRecord.from_record(
+                    row_id, row, table_columns=create_query.columns
+                )
+                for records in walk_btree(root_page, database, RecordCollector())
+                for row_id, row in records
             ]
             # Print out the values for the lookup column
             for record in records:
@@ -100,7 +102,7 @@ def main():
                 # Join the column values and print them out,
                 # if they are specified in the user command SQL
                 line = "|".join(
-                    column_value
+                    str(column_value)
                     for column_name, column_value in sorted_columns
                     if column_name in user_command_sql.columns
                 )

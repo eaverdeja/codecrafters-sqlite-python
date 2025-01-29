@@ -86,11 +86,6 @@ class BTreeWalker(Protocol[T]):
         return None
 
 
-class CellCounter(BTreeWalker[int]):
-    def visit_leaf(self, page: Page) -> int:
-        return page.cell_count
-
-
 def walk_btree(
     page: Page, database: Database, walker: BTreeWalker[T]
 ) -> Generator[T, None, None]:

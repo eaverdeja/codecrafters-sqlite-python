@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Any
 
 from .serial_type import SQLiteSerialType
 from .varint import Varint
@@ -102,15 +103,24 @@ class SqliteSchemaRecord(RecordFormat):
 
 class UserTableRecord(RecordFormat):
     @classmethod
-    def from_record(cls, data: bytes, table_columns: list[str]):
+    def from_record(cls, row_id: int, data: bytes, table_columns: list[str]):
         offset, serial_types = cls.parse_header(data)
 
         # For every column we have, pair it with a serial type
         # and retrieve the associated data
-        columns = {}
+        columns: dict[str, Any] = {}
         for column_idx, column in enumerate(table_columns):
+            if column == "id":
+                columns[column] = row_id
+                continue
+
             bytes_length = serial_types[column_idx][1]
-            value = (data[offset : offset + bytes_length]).decode()
+            value: Any
+            try:
+                value = (data[offset : offset + bytes_length]).decode()
+            except UnicodeDecodeError:
+                # TODO: Check serial type instead of letting things blow up
+                value = int.from_bytes(data[offset : offset + bytes_length])
             columns[column] = value
             offset += bytes_length
 
