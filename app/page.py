@@ -1,4 +1,9 @@
 from enum import Enum
+from typing import Generator, Self, TypeVar, Protocol
+
+from .database import Database
+
+T = TypeVar("T", covariant=True)
 
 
 class PageType(Enum):
@@ -33,6 +38,16 @@ class Page:
             else None
         )
 
+    @classmethod
+    def get_page(cls, database: Database, page_number: int) -> Self:
+        with database.reader() as f:
+            # If we're on the first page, skip the file header
+            offset = 100 if page_number == 0 else database.page_size * page_number
+            f.seek(offset)
+
+            data = f.read(database.page_size)
+            return cls(data, page_number)
+
     @property
     def cell_count(self) -> int:
         # The two-byte integer at offset 3 gives the number of cells on the page.
@@ -59,3 +74,48 @@ class Page:
             )
             pointers.append(pointer)
         return pointers
+
+
+class BTreeWalker(Protocol[T]):
+    def visit_leaf(self, page: Page) -> T:
+        "Process a leaf page and return a result"
+        pass
+
+    def visit_interior(self, _: Page) -> T | None:
+        "Optionally process an interior page"
+        return None
+
+
+class CellCounter(BTreeWalker[int]):
+    def visit_leaf(self, page: Page) -> int:
+        return page.cell_count
+
+
+def walk_btree(
+    page: Page, database: Database, walker: BTreeWalker[T]
+) -> Generator[T, None, None]:
+    # Process leaf nodes
+    if page.type == PageType.LEAF_TABLE_B_TREE:
+        yield walker.visit_leaf(page)
+        return
+
+    # Optionally process interior nodes
+    result = walker.visit_interior(page)
+    if result is not None:
+        yield result
+
+    # Traverse through all the left pointers
+    for cell_pointer in page.cell_pointers:
+        # The format of a cell depends on which kind of b-tree page the cell appears on...
+        # For Table B-Tree Interior Cells, the first piece of information
+        # is a 4-byte big-endian page number which is the left child pointer.
+        left_child_pointer = int.from_bytes(
+            page.data[cell_pointer : cell_pointer + 4], byteorder="big"
+        )
+        child_page = Page.get_page(database, left_child_pointer - 1)
+        yield from walk_btree(child_page, database, walker)
+
+    # Finally, traverse through the right pointer
+    if page.rightmost_pointer:
+        rightmost_page = Page.get_page(database, page.rightmost_pointer - 1)
+        yield from walk_btree(rightmost_page, database, walker)

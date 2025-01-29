@@ -2,23 +2,12 @@ from contextlib import contextmanager
 from io import BufferedReader
 from typing import Generator
 
-from .page import Page
-
 
 class Database:
     def __init__(self, path: str):
         self.path = path
         with self.reader() as f:
             self.page_size = self._get_page_size(f)
-
-    def get_page(self, page_number: int) -> Page:
-        with open(self.path, "rb") as f:
-            # If we're on the first page, skip the file header
-            offset = 100 if page_number == 0 else self.page_size * page_number
-            f.seek(offset)
-
-            data = f.read(self.page_size)
-            return Page(data, page_number)
 
     @contextmanager
     def reader(self) -> Generator[BufferedReader, None, None]:

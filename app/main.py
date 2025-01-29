@@ -1,7 +1,8 @@
 import sys
 
+
 from .database import Database
-from .page import Page, PageType
+from .page import Page, PageType, CellCounter, walk_btree
 from .records import RecordFormat, UserTableRecord, SqliteSchemaRecord
 from .sql import SQL
 
@@ -9,7 +10,7 @@ from .sql import SQL
 def _get_records_for_sqlite_schema_table(
     database: Database,
 ) -> list[SqliteSchemaRecord]:
-    page = database.get_page(0)
+    page = Page.get_page(database, 0)
     if not page:
         raise Exception("Expected root page to exist")
 
@@ -19,42 +20,13 @@ def _get_records_for_sqlite_schema_table(
     ]
 
 
-def _get_total_cell_count_for_table(
-    database: Database,
-    page: Page,
-):
-    if page.type == PageType.LEAF_TABLE_B_TREE:
-        return page.cell_count
-    elif page.type == PageType.INTERIOR_TABLE_B_TREE:
-        total_count = 0
-
-        with database.reader() as database_file:
-            for cell_pointer in page.cell_pointers:
-                database_file.seek(database.page_size * page.page_number + cell_pointer)
-                left_child_pointer = int.from_bytes(
-                    database_file.read(4), byteorder="big"
-                )
-                child_page = database.get_page(left_child_pointer - 1)
-                child_count = _get_total_cell_count_for_table(database, child_page)
-                total_count += child_count
-
-        if page.rightmost_pointer:
-            rightmost_page = database.get_page(page.rightmost_pointer - 1)
-            rightmost_count = _get_total_cell_count_for_table(database, rightmost_page)
-            total_count += rightmost_count
-
-        return total_count
-    else:
-        return 0
-
-
 def main():
     database_file_path = sys.argv[1]
     command = sys.argv[2].lower()
     database = Database(database_file_path)
 
     if command == ".dbinfo":
-        page = database.get_page(0)
+        page = Page.get_page(database, 0)
         print(f"database page size: {database.page_size}")
         # In our case, the cell count on the first page will equal the
         # number of tables in the database. That's because we have no indexes,
@@ -80,10 +52,12 @@ def main():
         page_number = int.from_bytes(table_record.rootpage, byteorder="big") - 1
 
         # Read the root page into memory
-        root_page = database.get_page(page_number)
+        root_page = Page.get_page(database, page_number)
 
         if "count(*)" in user_command_sql.columns:
-            cell_count = _get_total_cell_count_for_table(database, root_page)
+            # Walk the b-tree from the root page, aggregating all
+            # cell counts from leaf table pages
+            cell_count = sum(walk_btree(root_page, database, CellCounter()))
             print(cell_count)
         else:  # Assume a SELECT {columns} FROM {table} type query
             if not root_page.type == PageType.LEAF_TABLE_B_TREE:
