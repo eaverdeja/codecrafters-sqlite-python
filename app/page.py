@@ -34,7 +34,8 @@ class Page:
         # and is omitted from all other pages.
         self.rightmost_pointer = (
             int.from_bytes(data[8:12], byteorder="big")
-            if self.type == PageType.INTERIOR_TABLE_B_TREE
+            if self.type
+            in (PageType.INTERIOR_TABLE_B_TREE, PageType.INTERIOR_INDEX_B_TREE)
             else None
         )
 
@@ -85,6 +86,9 @@ class BTreeWalker(Protocol[T]):
         "Optionally process an interior page"
         return None
 
+    def choose_paths(self, page: Page) -> list[int]:
+        pass
+
 
 def walk_btree(
     page: Page, database: Database, walker: BTreeWalker[T]
@@ -114,3 +118,49 @@ def walk_btree(
     if page.rightmost_pointer:
         rightmost_page = Page.get_page(database, page.rightmost_pointer - 1)
         yield from walk_btree(rightmost_page, database, walker)
+
+
+def search_index(
+    page: Page, database: Database, walker: BTreeWalker[T]
+) -> Generator[T, None, None]:
+    """
+    Search a B-tree index structure.
+    """
+    print(f"\nSearching page {page.page_number} (type: {page.type})")
+
+    result = None
+    if page.type == PageType.LEAF_INDEX_B_TREE:
+        result = walker.visit_leaf(page)
+        print(f"Found {len(result)} matches in leaf page {page.page_number}")
+        yield result
+        return
+
+    if result := walker.visit_interior(page):
+        print(f"Found {len(result)} matches in interior page {page.page_number}")
+        yield result
+
+    child_idxs = walker.choose_paths(page)
+
+    print(f"Following paths {child_idxs} in page {page.page_number}")
+
+    for child_idx in child_idxs:
+        if child_idx == -1:
+            if not page.rightmost_pointer:
+                raise ValueError("Expected rightmost pointer in interior index page")
+            print(
+                f"\nFollowing rightmost pointer ({page.rightmost_pointer-1}) from page {page.page_number}"
+            )
+            child_page = Page.get_page(database, page.rightmost_pointer - 1)
+        else:
+            cell_pointer = page.cell_pointers[child_idx]
+            with database.reader() as database_file:
+                database_file.seek(database.page_size * page.page_number + cell_pointer)
+                left_child_pointer = int.from_bytes(
+                    database_file.read(4), byteorder="big"
+                )
+            print(
+                f"\nFollowing child pointer {left_child_pointer-1} at index {child_idx} from page {page.page_number}"
+            )
+            child_page = Page.get_page(database, left_child_pointer - 1)
+
+        yield from search_index(child_page, database, walker)

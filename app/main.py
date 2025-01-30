@@ -2,8 +2,8 @@ import sys
 
 
 from .database import Database
-from .btree import RecordCollector, CellCounter
-from .page import Page, walk_btree
+from .btree import IndexSearcher, RecordCollector, CellCounter
+from .page import Page, search_index, walk_btree
 from .records import RecordFormat, UserTableRecord, SqliteSchemaRecord
 from .sql import SQL
 
@@ -42,10 +42,11 @@ def main():
         user_command_sql = SQL.from_query(command)
 
         # Get the schema record corresponding to the table we're looking up
+        sqlite_schema_records = _get_records_for_sqlite_schema_table(database)
         table_record = next(
             (
                 record
-                for record in _get_records_for_sqlite_schema_table(database)
+                for record in sqlite_schema_records
                 if record.table_name == user_command_sql.table
             )
         )
@@ -64,14 +65,41 @@ def main():
             # Parse the CREATE TABLE query to figure out
             # the available columns and their ordering
             create_query = SQL.from_query(table_record.sql)
-            # Retrieve the data records for our lookup table
-            records = [
-                UserTableRecord.from_record(
-                    row_id, row, table_columns=create_query.columns
+
+            # Is there filtering going on?
+            if user_command_sql.where and "country" in user_command_sql.where.keys():
+                # Let's look for an index we can use
+                index_record = next(
+                    (
+                        record
+                        for record in sqlite_schema_records
+                        if record.record_type == "index"
+                        and record.name == "idx_companies_country"
+                    )
                 )
-                for records in walk_btree(root_page, database, RecordCollector())
-                for row_id, row in records
-            ]
+                index_root_page = Page.get_page(
+                    database, int.from_bytes(index_record.rootpage) - 1
+                )
+                key = user_command_sql.where["country"].encode()
+                idxs = [
+                    idx
+                    for idxs in search_index(
+                        index_root_page,
+                        database,
+                        IndexSearcher(database, key),
+                    )
+                    for idx in idxs
+                ]
+                print(idxs)
+            else:
+                # Retrieve the data records for our lookup table using a full-table scan
+                records = [
+                    UserTableRecord.from_record(
+                        row_id, row, table_columns=create_query.columns
+                    )
+                    for records in walk_btree(root_page, database, RecordCollector())
+                    for row_id, row in records
+                ]
             # Print out the values for the lookup column
             for record in records:
                 # Compute any comparison and apply our where clause
