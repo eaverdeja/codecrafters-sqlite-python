@@ -10,8 +10,12 @@ class CellCounter(BTreeWalker[int]):
 
 
 class RecordCollector(BTreeWalker[list[tuple[int, bytes]]]):
+    def __init__(self, target_row_id: int | None = None):
+        self.target_row_id = target_row_id
+
     def visit_leaf(self, page: Page):
         records = []
+        print(f"\nLooking in page #{page.page_number} - {page.type}")
         for cell_pointer in page.cell_pointers:
             offset = 0
             data = page.data[cell_pointer:]
@@ -27,24 +31,27 @@ class RecordCollector(BTreeWalker[list[tuple[int, bytes]]]):
 
             # The third information is the actual record payload
             data = data[offset : offset + record_size_varint.value]
-            records.append((rowid_varint.value, data))
+            if not self.target_row_id:
+                records.append((rowid_varint.value, data))
+            elif rowid_varint.value == self.target_row_id:
+                records.append((rowid_varint.value, data))
 
+        print(f"Found {len(records)} records in leaf page")
         return records
 
 
-class IndexSearcher(BTreeWalker[list[tuple[bytes, int]]]):
+class IndexSearcher(BTreeWalker[list[int]]):
     def __init__(self, database: Database, search_key: bytes):
         self.database = database
         self.search_key = search_key
-        print(f"Searching for key: {self.search_key!r}")
+        # print(f"Searching for key: {self.search_key!r}")
 
-    def visit_leaf(self, page: Page) -> list[tuple[bytes, int]]:
+    def visit_leaf(self, page: Page) -> list[int]:
         """
         Search leaf page for matching key.
         """
-        print(f"Visiting leaf page {page.page_number}")
+        # print(f"Visiting leaf page {page.page_number}")
         records = []
-        keys = set()
         with self.database.reader() as f:
             for cell_pointer in page.cell_pointers:
                 # Position at start of cell content
@@ -57,20 +64,18 @@ class IndexSearcher(BTreeWalker[list[tuple[bytes, int]]]):
                 key_record = f.read(payload_size.value)
                 key, rowid = self._parse_key_record(key_record)
 
-                keys.add(key)
                 if self.search_key == key:
-                    records.append((key, rowid))
+                    records.append(rowid)
 
                 # Index entries are sorted, so we can stop if we've gone too far
                 if key > self.search_key:
-                    print(f"  Key {key!r} > search key {self.search_key!r}, stopping")
+                    # print(f"  Key {key!r} > search key {self.search_key!r}, stopping")
                     break
 
         return records
 
-    def visit_interior(self, page: Page) -> list[tuple[bytes, int]] | None:
-        keys = []
-        rowids = []
+    def visit_interior(self, page: Page) -> list[int]:
+        records = []
         with self.database.reader() as f:
             for cell_pointer in page.cell_pointers:
                 f.seek(self.database.page_size * page.page_number + cell_pointer)
@@ -78,23 +83,19 @@ class IndexSearcher(BTreeWalker[list[tuple[bytes, int]]]):
                 payload_size = Varint.from_data(f).value
                 key_record = f.read(payload_size)
                 key, rowid = self._parse_key_record(key_record)
-                keys.append(key)
-                rowids.append(rowid)
 
-        matches = []
-        for key, rowid in zip(keys, rowids):
-            if key == self.search_key:
-                matches.append((key, rowid))
-            elif key > self.search_key:
-                break
+                if key == self.search_key:
+                    records.append(rowid)
+                elif key > self.search_key:
+                    break
 
-        return matches
+        return records
 
     def choose_paths(self, page: Page) -> list[int]:
         """
         Determine which child pages to follow by comparing keys.
         """
-        print(f"Choosing paths in page {page.page_number}")
+        # print(f"Choosing paths in page {page.page_number}")
         paths = []
         found_larger = False
 
@@ -109,35 +110,35 @@ class IndexSearcher(BTreeWalker[list[tuple[bytes, int]]]):
                 keys.append(key)
 
         if self.search_key < keys[0]:
-            print(
-                f"  Search key {self.search_key!r} < first key {keys[0]!r}, using leftmost pointer"
-            )
+            # print(
+            #     f"  Search key {self.search_key!r} < first key {keys[0]!r}, using leftmost pointer"
+            # )
             return [0]
         if self.search_key > keys[-1]:
-            print(
-                f"  Search key {self.search_key!r} > last key {keys[-1]!r}, using rightmost pointer"
-            )
+            # print(
+            #     f"  Search key {self.search_key!r} > last key {keys[-1]!r}, using rightmost pointer"
+            # )
             return [-1]
 
         # Now analyze the keys
         for i, key in enumerate(keys):
             if key > self.search_key:
                 # Found a larger key after some matches
-                print(f"  Found larger key {key!r} after matches")
+                # print(f"  Found larger key {key!r} after matches")
                 paths.append(i)
                 found_larger = True
                 break
             elif self.search_key == key:
                 # Found a matching key - follow it and keep going
-                print(f"  Found matching key at index {i}")
+                # print(f"  Found matching key at index {i}")
                 paths.append(i)
 
         # If we haven't found a larger key, follow rightmost pointer
         if not found_larger:
-            print("  No larger key found, using rightmost pointer")
+            # print("  No larger key found, using rightmost pointer")
             paths.append(-1)
 
-        print(f"  Chosen paths: {paths}")
+        # print(f"  Chosen paths: {paths}")
         return paths
 
     def _parse_key_record(self, key_record: bytes) -> tuple[bytes, int]:

@@ -67,6 +67,7 @@ def main():
             create_query = SQL.from_query(table_record.sql)
 
             # Is there filtering going on?
+            idxs = []
             if user_command_sql.where and "country" in user_command_sql.where.keys():
                 # Let's look for an index we can use
                 index_record = next(
@@ -90,30 +91,57 @@ def main():
                     )
                     for idx in idxs
                 ]
-                print(idxs)
+
+            # print("\n -------------------------- \n")
+
+            # print(sorted(idxs))
+            records = []
+            if idxs:
+                # Retrieve the data records using the index
+                for target_row_id in sorted(idxs):
+                    print(f"\nLooking for target row id {target_row_id}")
+                    for rows in walk_btree(
+                        root_page,
+                        database,
+                        RecordCollector(target_row_id),
+                        target_row_id,
+                    ):
+                        for row_id, row in rows:
+                            records.append(
+                                UserTableRecord.from_record(
+                                    row_id, row, table_columns=create_query.columns
+                                )
+                            )
             else:
                 # Retrieve the data records for our lookup table using a full-table scan
                 records = [
                     UserTableRecord.from_record(
                         row_id, row, table_columns=create_query.columns
                     )
-                    for records in walk_btree(root_page, database, RecordCollector())
+                    for records in walk_btree(
+                        root_page,
+                        database,
+                        RecordCollector(),
+                    )
                     for row_id, row in records
                 ]
+
             # Print out the values for the lookup column
             for record in records:
+                column_values = {col: record[col] for col in create_query.columns}
                 # Compute any comparison and apply our where clause
                 # to filter out records
-                comparisons = {
-                    col: user_command_sql.where.get(col) for col in create_query.columns
-                }
-                column_values = {col: record[col] for col in create_query.columns}
-                pairs = zip(column_values.values(), comparisons.values())
-                if any(
-                    comparison is not None and value.lower() != comparison.lower()
-                    for value, comparison in pairs
-                ):
-                    continue
+                if not idxs:
+                    comparisons = {
+                        col: user_command_sql.where.get(col)
+                        for col in create_query.columns
+                    }
+                    pairs = zip(column_values.values(), comparisons.values())
+                    if any(
+                        comparison is not None and value.lower() != comparison.lower()
+                        for value, comparison in pairs
+                    ):
+                        continue
 
                 # Keep things sorted as specified in the user command SQL
                 def _find(l: list, value: str) -> int:
