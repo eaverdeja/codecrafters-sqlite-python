@@ -92,14 +92,10 @@ def main():
                     for idx in idxs
                 ]
 
-            # print("\n -------------------------- \n")
-
-            # print(sorted(idxs))
             records = []
             if idxs:
-                # Retrieve the data records using the index
+                # Retrieve the data records for our lookup table using the index
                 for target_row_id in sorted(idxs):
-                    print(f"\nLooking for target row id {target_row_id}")
                     for rows in walk_btree(
                         root_page,
                         database,

@@ -15,7 +15,6 @@ class RecordCollector(BTreeWalker[list[tuple[int, bytes]]]):
 
     def visit_leaf(self, page: Page):
         records = []
-        print(f"\nLooking in page #{page.page_number} - {page.type}")
         for cell_pointer in page.cell_pointers:
             offset = 0
             data = page.data[cell_pointer:]
@@ -36,7 +35,6 @@ class RecordCollector(BTreeWalker[list[tuple[int, bytes]]]):
             elif rowid_varint.value == self.target_row_id:
                 records.append((rowid_varint.value, data))
 
-        print(f"Found {len(records)} records in leaf page")
         return records
 
 
@@ -44,13 +42,11 @@ class IndexSearcher(BTreeWalker[list[int]]):
     def __init__(self, database: Database, search_key: bytes):
         self.database = database
         self.search_key = search_key
-        # print(f"Searching for key: {self.search_key!r}")
 
     def visit_leaf(self, page: Page) -> list[int]:
         """
         Search leaf page for matching key.
         """
-        # print(f"Visiting leaf page {page.page_number}")
         records = []
         with self.database.reader() as f:
             for cell_pointer in page.cell_pointers:
@@ -69,7 +65,6 @@ class IndexSearcher(BTreeWalker[list[int]]):
 
                 # Index entries are sorted, so we can stop if we've gone too far
                 if key > self.search_key:
-                    # print(f"  Key {key!r} > search key {self.search_key!r}, stopping")
                     break
 
         return records
@@ -95,7 +90,6 @@ class IndexSearcher(BTreeWalker[list[int]]):
         """
         Determine which child pages to follow by comparing keys.
         """
-        # print(f"Choosing paths in page {page.page_number}")
         paths = []
         found_larger = False
 
@@ -110,35 +104,23 @@ class IndexSearcher(BTreeWalker[list[int]]):
                 keys.append(key)
 
         if self.search_key < keys[0]:
-            # print(
-            #     f"  Search key {self.search_key!r} < first key {keys[0]!r}, using leftmost pointer"
-            # )
             return [0]
         if self.search_key > keys[-1]:
-            # print(
-            #     f"  Search key {self.search_key!r} > last key {keys[-1]!r}, using rightmost pointer"
-            # )
             return [-1]
 
         # Now analyze the keys
         for i, key in enumerate(keys):
             if key > self.search_key:
-                # Found a larger key after some matches
-                # print(f"  Found larger key {key!r} after matches")
                 paths.append(i)
                 found_larger = True
                 break
             elif self.search_key == key:
-                # Found a matching key - follow it and keep going
-                # print(f"  Found matching key at index {i}")
                 paths.append(i)
 
         # If we haven't found a larger key, follow rightmost pointer
         if not found_larger:
-            # print("  No larger key found, using rightmost pointer")
             paths.append(-1)
 
-        # print(f"  Chosen paths: {paths}")
         return paths
 
     def _parse_key_record(self, key_record: bytes) -> tuple[bytes, int]:

@@ -51,6 +51,22 @@ class Page:
             data = f.read(database.page_size)
             return cls(data, page_number)
 
+    def get_child_pointer(self, cell_pointer: int) -> int:
+        # The format of a cell depends on which kind of b-tree page the cell appears on...
+        # For Table B-Tree Interior Cells, the first piece of information
+        # is a 4-byte big-endian page number which is the left child pointer.
+        if not self.type in (
+            PageType.INTERIOR_TABLE_B_TREE,
+            PageType.INTERIOR_INDEX_B_TREE,
+        ):
+            raise Exception("Trying to get child pointer on leaf page!")
+        return int.from_bytes(self.data[cell_pointer : cell_pointer + 4])
+
+    def get_row_id(self, cell_pointer: int) -> Varint:
+        # On interior table pages, after the child pointer we have
+        # a varint which is the integer key, aka "rowid" or "row_id"
+        return Varint.from_data(self.data[cell_pointer + 4 :])
+
     @property
     def cell_count(self) -> int:
         # The two-byte integer at offset 3 gives the number of cells on the page.
@@ -110,63 +126,59 @@ def walk_btree(
 
     if target_row_id:
         # Index scan
-        # print(f"\nLooking for rowid {target_row_id}")
-        # Binary search to find leaf pages
-        left, right = 0, page.cell_count - 1
 
+        # First we check the lower and upper bounds
         first_cell_pointer = page.cell_pointers[0]
-        first_row_id = Varint.from_data(page.data[first_cell_pointer + 4 :])
-        # print(f"First row id: {first_row_id.value}")
+        first_row_id = page.get_row_id(first_cell_pointer)
 
         last_cell_pointer = page.cell_pointers[-1]
-        last_row_id = Varint.from_data(page.data[last_cell_pointer + 4 :])
-        # print(f"Last row id: {last_row_id.value}")
+        last_row_id = page.get_row_id(last_cell_pointer)
 
+        # If our target is larger than the last rowid on this node,
+        # we need to use the rightmost pointer
         if target_row_id > last_row_id.value:
-            print(f"{target_row_id} > {last_row_id.value}, using rightmost pointer")
             if page.rightmost_pointer:
                 rightmost_page = Page.get_page(database, page.rightmost_pointer - 1)
                 yield from walk_btree(rightmost_page, database, walker, target_row_id)
+                return
+        # If our target is smaller than the first rowid on this node,
+        # we need to use the leftmost pointer
         elif target_row_id < first_row_id.value:
-            print(f"{target_row_id} < {first_row_id.value}, using leftmost pointer")
-            left_child_pointer = int.from_bytes(
-                page.data[first_cell_pointer : first_cell_pointer + 4]
-            )
+            left_child_pointer = page.get_child_pointer(first_cell_pointer)
             leftmost_page = Page.get_page(database, left_child_pointer - 1)
             yield from walk_btree(leftmost_page, database, walker, target_row_id)
+            return
         else:
+            # If our target is in between our bounds,
+            # let's use binary search to find the
+            # leaf page we're interested in
+            left, right = 0, page.cell_count - 1
             next_page_number = -1
+
             while left <= right:
                 mid = (left + right) // 2
 
                 cell_pointer = page.cell_pointers[mid]
-                row_id = Varint.from_data(page.data[cell_pointer + 4 :])
+                row_id = page.get_row_id(cell_pointer)
 
-                # print(f"Found rowid {row_id.value} in position {mid}")
                 if target_row_id <= row_id.value:
-                    # print(f"{target_row_id} < {row_id.value}, looking in left")
                     right = mid - 1
-                    left_child_pointer = int.from_bytes(
-                        page.data[cell_pointer : cell_pointer + 4]
-                    )
+                    left_child_pointer = page.get_child_pointer(cell_pointer)
                     next_page_number = left_child_pointer - 1
                 else:
-                    # print(f"{target_row_id} > {row_id.value}, looking in right")
                     left = mid + 1
-                    assert page.rightmost_pointer is not None
-                    next_page_number = page.rightmost_pointer - 1
-                next_page = Page.get_page(database, next_page_number)
-                yield from walk_btree(next_page, database, walker, target_row_id)
+                    cell_pointer = page.cell_pointers[left]
+                    right_child_pointer = page.get_child_pointer(cell_pointer)
+                    next_page_number = right_child_pointer - 1
+
+            next_page = Page.get_page(database, next_page_number)
+            yield from walk_btree(next_page, database, walker, target_row_id)
     else:
         # Full-table scan
+
         # Traverse through all the left pointers
         for cell_pointer in page.cell_pointers:
-            # The format of a cell depends on which kind of b-tree page the cell appears on...
-            # For Table B-Tree Interior Cells, the first piece of information
-            # is a 4-byte big-endian page number which is the left child pointer.
-            left_child_pointer = int.from_bytes(
-                page.data[cell_pointer : cell_pointer + 4], byteorder="big"
-            )
+            left_child_pointer = page.get_child_pointer(cell_pointer)
             child_page = Page.get_page(database, left_child_pointer - 1)
             yield from walk_btree(child_page, database, walker, target_row_id)
 
@@ -182,30 +194,21 @@ def search_index(
     """
     Search a B-tree index structure.
     """
-    # print(f"\nSearching page {page.page_number} (type: {page.type})")
-
     result = None
     if page.type == PageType.LEAF_INDEX_B_TREE:
         result = walker.visit_leaf(page)
-        # print(f"Found {len(result)} matches in leaf page {page.page_number}")
         yield result
         return
 
     if result := walker.visit_interior(page):
-        # print(f"Found {len(result)} matches in interior page {page.page_number}")
         yield result
 
     child_idxs = walker.choose_paths(page)
-
-    # print(f"Following paths {child_idxs} in page {page.page_number}")
 
     for child_idx in child_idxs:
         if child_idx == -1:
             if not page.rightmost_pointer:
                 raise ValueError("Expected rightmost pointer in interior index page")
-            # print(
-            # f"\nFollowing rightmost pointer ({page.rightmost_pointer-1}) from page {page.page_number}"
-            # )
             child_page = Page.get_page(database, page.rightmost_pointer - 1)
         else:
             cell_pointer = page.cell_pointers[child_idx]
@@ -214,9 +217,6 @@ def search_index(
                 left_child_pointer = int.from_bytes(
                     database_file.read(4), byteorder="big"
                 )
-            # print(
-            #     f"\nFollowing child pointer {left_child_pointer-1} at index {child_idx} from page {page.page_number}"
-            # )
             child_page = Page.get_page(database, left_child_pointer - 1)
 
         yield from search_index(child_page, database, walker)
