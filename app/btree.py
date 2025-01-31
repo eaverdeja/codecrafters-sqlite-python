@@ -14,27 +14,42 @@ class RecordCollector(BTreeWalker[list[tuple[int, bytes]]]):
         self.target_row_id = target_row_id
 
     def visit_leaf(self, page: Page):
+        if self.target_row_id:
+            return self._binary_search(page)
+        else:
+            return self._full_scan(page)
+
+    def _binary_search(self, page: Page):
+        if not self.target_row_id:
+            raise Exception("Tried to use binary search without a target row id")
+
+        left, right = 0, page.cell_count - 1
+
+        while left <= right:
+            mid = (left + right) // 2
+            cell_pointer = page.cell_pointers[mid]
+            row_id = page.get_row_id(cell_pointer)
+
+            if self.target_row_id == row_id.value:
+                record_size = page.get_record_size(cell_pointer)
+                offset = cell_pointer + record_size.bytes_length + row_id.bytes_length
+                data = page.data[offset : offset + record_size.value]
+                return (row_id.value, data)
+            elif self.target_row_id < row_id.value:
+                right = mid - 1
+            else:
+                left = mid + 1
+
+    def _full_scan(self, page: Page):
         records = []
         for cell_pointer in page.cell_pointers:
-            offset = 0
-            data = page.data[cell_pointer:]
+            record_size = page.get_record_size(cell_pointer)
+            row_id = page.get_row_id(cell_pointer)
 
-            # The first relevant information in the cell is a
-            # varint that describes the record's payload size
-            record_size_varint = Varint.from_data(data[offset:])
-            offset += record_size_varint.bytes_length
+            offset = cell_pointer + record_size.bytes_length + row_id.bytes_length
+            data = page.data[offset : offset + record_size.value]
 
-            # The second information is the rowid, also a varint
-            rowid_varint = Varint.from_data(data[offset:])
-            offset += rowid_varint.bytes_length
-
-            # The third information is the actual record payload
-            data = data[offset : offset + record_size_varint.value]
-            if not self.target_row_id:
-                records.append((rowid_varint.value, data))
-            elif rowid_varint.value == self.target_row_id:
-                records.append((rowid_varint.value, data))
-
+            records.append((row_id.value, data))
         return records
 
 

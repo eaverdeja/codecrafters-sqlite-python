@@ -96,18 +96,17 @@ def main():
             if idxs:
                 # Retrieve the data records for our lookup table using the index
                 for target_row_id in sorted(idxs):
-                    for rows in walk_btree(
+                    for row_id, row in walk_btree(
                         root_page,
                         database,
                         RecordCollector(target_row_id),
                         target_row_id,
                     ):
-                        for row_id, row in rows:
-                            records.append(
-                                UserTableRecord.from_record(
-                                    row_id, row, table_columns=create_query.columns
-                                )
+                        records.append(
+                            UserTableRecord.from_record(
+                                row_id, row, table_columns=create_query.columns
                             )
+                        )
             else:
                 # Retrieve the data records for our lookup table using a full-table scan
                 records = [

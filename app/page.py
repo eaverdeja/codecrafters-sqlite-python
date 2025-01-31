@@ -65,7 +65,22 @@ class Page:
     def get_row_id(self, cell_pointer: int) -> Varint:
         # On interior table pages, after the child pointer we have
         # a varint which is the integer key, aka "rowid" or "row_id"
-        return Varint.from_data(self.data[cell_pointer + 4 :])
+        if self.type == PageType.INTERIOR_TABLE_B_TREE:
+            return Varint.from_data(self.data[cell_pointer + 4 :])
+        # For table leaf pages, we need to grab it after the record size
+        if self.type == PageType.LEAF_TABLE_B_TREE:
+            record_size = self.get_record_size(cell_pointer)
+            return Varint.from_data(
+                self.data[cell_pointer + record_size.bytes_length :]
+            )
+        else:
+            raise Exception("Trying to get row_id on non-table page")
+
+    def get_record_size(self, cell_pointer: int) -> Varint:
+        # This is the first piece of information in cells for leaf pages
+        if self.type not in (PageType.LEAF_TABLE_B_TREE, PageType.LEAF_INDEX_B_TREE):
+            raise Exception("Only leaf cells have a record size")
+        return Varint.from_data(self.data[cell_pointer:])
 
     @property
     def cell_count(self) -> int:
